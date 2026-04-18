@@ -371,17 +371,15 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-async def run_bot():
-    """تشغيل البوت بشكل غير متزامن مع معالجة حلقة الأحداث"""
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("banned", banned_list))
-    app.add_handler(CommandHandler("unban", unban_command))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & filters.UpdateType.MESSAGE, handle_message))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply), group=1)
-    print("✅ البوت يعمل الآن على Render...")
-    await app.run_polling()
+# ========== دالة ما قبل التشغيل (لمنع التعارضات) ==========
+async def post_init_handler(application: Application) -> None:
+    """
+    هذه الدالة تُنفذ قبل بدء البوت في استقبال التحديثات.
+    تقوم بحذف أي webhook قديم وتجاهل أي تحديثات معلقة لضمان بداية نظيفة.
+    """
+    print("🧹 جاري تنظيف جلسات البوت القديمة...")
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    print("✅ تم تنظيف الجلسات القديمة بنجاح.")
 
 def main():
     # تشغيل خادم HTTP الوهمي في خيط منفصل (دون تعارض مع المنفذ)
@@ -392,15 +390,32 @@ def main():
             self.end_headers()
             self.wfile.write(b"Bot is running")
         def log_message(self, format, *args):
-            pass  # إيقاف طباعة الطلبات لتقليل التشويش
+            pass
     def run_server():
         with socketserver.TCPServer(("0.0.0.0", port), Handler) as httpd:
             print(f"خادم HTTP الوهمي يعمل على المنفذ {port}")
             httpd.serve_forever()
     threading.Thread(target=run_server, daemon=True).start()
 
-    # تشغيل البوت مع asyncio
-    asyncio.run(run_bot())
+    # --- تشغيل البوت مع تنظيف الجلسات القديمة ---
+    app = Application.builder().token(TOKEN).post_init(post_init_handler).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("banned", banned_list))
+    app.add_handler(CommandHandler("unban", unban_command))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & filters.UpdateType.MESSAGE, handle_message))
+    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply), group=1)
+    print("✅ البوت يعمل الآن على Render...")
+
+    # استخدام حلقة أحداث جديدة مخصصة لهذا الخيط
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(app.run_polling())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
     main()
