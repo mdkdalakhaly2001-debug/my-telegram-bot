@@ -15,39 +15,55 @@ GROUP_ID = -1003367543007
 ADMIN_CHANNEL_ID = -1003751647210
 GROUP_LINK = "https://t.me/+fmOvJlfty01iZTBk"
 STATS_FILE = "user_stats.json"
+MAINTENANCE_FILE = "maintenance_data.json"
 BOT_USERNAME = "InscripAtions_Archive_bot"
+MAINTENANCE_ADMINS = [757897877, 7926761229, 8202260795]
 # ===================================
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# ========== إدارة إحصائيات المستخدمين ==========
-def load_stats():
-    if not os.path.exists(STATS_FILE):
-        return {}
-    with open(STATS_FILE, "r") as f:
+# ========== إدارة الملفات ==========
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    with open(path, "r") as f:
         try:
             return json.load(f)
         except:
-            return {}
+            return default
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_stats():
+    return load_json(STATS_FILE, {})
 
 def save_stats(stats):
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f, indent=2)
+    save_json(STATS_FILE, stats)
 
 def get_user_stats(user_id):
     stats = load_stats()
     uid = str(user_id)
     if uid not in stats:
-        stats[uid] = {"warns": 0, "banned": False}
+        stats[uid] = {"warns": 0, "banned": False, "msg_count": 0}
     return stats[uid]
 
 def update_user_stats(user_id, key, value):
     stats = load_stats()
     uid = str(user_id)
     if uid not in stats:
-        stats[uid] = {"warns": 0, "banned": False}
+        stats[uid] = {"warns": 0, "banned": False, "msg_count": 0}
     stats[uid][key] = value
     save_stats(stats)
+
+def increment_msg_count(user_id):
+    s = get_user_stats(user_id)
+    s["msg_count"] += 1
+    update_user_stats(user_id, "msg_count", s["msg_count"])
+
+def get_msg_count(user_id):
+    return get_user_stats(user_id)["msg_count"]
 
 def increment_warn(user_id):
     s = get_user_stats(user_id)
@@ -64,33 +80,63 @@ def set_banned(user_id, banned):
 
 def is_banned(user_id):
     return get_user_stats(user_id)["banned"]
-# =============================================
+
+def load_maintenance():
+    return load_json(MAINTENANCE_FILE, {"mode": False, "users": [], "status_msg_id": None})
+
+def save_maintenance(data):
+    save_json(MAINTENANCE_FILE, data)
+
+def is_maintenance():
+    return load_maintenance().get("mode", False)
+
+def set_maintenance(enabled):
+    data = load_maintenance()
+    data["mode"] = enabled
+    if not enabled:
+        data["users"] = []
+    save_maintenance(data)
+
+def add_contacted_user(user_id):
+    data = load_maintenance()
+    if user_id not in data["users"]:
+        data["users"].append(user_id)
+        save_maintenance(data)
+
+def get_contacted_users():
+    return load_maintenance().get("users", [])
+
+def set_status_msg_id(msg_id):
+    data = load_maintenance()
+    data["status_msg_id"] = msg_id
+    save_maintenance(data)
+
+def get_status_msg_id():
+    return load_maintenance().get("status_msg_id")
+# ===============================
+
+async def post_init_handler(app: Application):
+    print("🧹 تنظيف الجلسات القديمة...")
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    print("✅ جاهز")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args and len(context.args) > 0:
-        arg = context.args[0]
-        if arg.startswith("reply_"):
-            parts = arg.split("_")
-            if len(parts) >= 3:
-                target_user_id = int(parts[1])
-                msg_id = int(parts[2])
-                context.user_data['replying_to'] = target_user_id
-                context.user_data['replying_to_msg_id'] = msg_id
-                await update.message.reply_text(
-                    f"✏️ اكتب ردك على المستخدم <code>{target_user_id}</code> (سيصله الرد من البوت ولن تظهر هويتك):",
-                    parse_mode="HTML"
-                )
-                return
-
-    welcome_text = (
+    if context.args and context.args[0].startswith("reply_"):
+        parts = context.args[0].split("_")
+        if len(parts) >= 3:
+            context.user_data['replying_to'] = int(parts[1])
+            context.user_data['replying_to_msg_id'] = int(parts[2])
+            await update.message.reply_text(
+                f"✏️ اكتب ردك على المستخدم <code>{parts[1]}</code>:",
+                parse_mode="HTML"
+            )
+            return
+    welcome = (
         "أهلاً بك في بوت أرشيف النقشات! 🎨\n\n"
-        "هذا البوت مخصص لاستقبال رسائلكم للرسومات الجديدة أو غير الموجودة (هندسية، نباتية، تجريدية الخ...)"
-        " أو أي ملاحظات أخرى من أعضاء مجموعة *ارشيف النقشات*.\n\n"
-        "🔹 أرسل الصورة أو الملف مباشرة هنا.\n"
-        "🔹 إذا لم تكن عضواً في المجموعة، لن يتم استلام إرسالك.\n\n"
-        "شكراً لمساهمتك!"
+        "أرسل الصورة أو الملف مباشرة هنا.\n"
+        "الخدمة متاحة لأعضاء مجموعة *ارشيف النقشات* فقط."
     )
-    await update.message.reply_text(welcome_text)
+    await update.message.reply_text(welcome)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -106,283 +152,251 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         is_member = False
 
-    if not is_member:
-        await msg.reply_text(
-            f"❌ عذرًا، هذه الخدمة متاحة فقط لأعضاء مجموعة *ارشيف النقشات*.\n\n"
-            f"🔗 يرجى الانضمام للمجموعة أولاً:\n{GROUP_LINK}"
-        )
-        return
+    maintenance = is_maintenance()
 
-    user_stats = get_user_stats(user_id)
-    warns_count = user_stats["warns"]
-    user_info = f"👤 <b>المستخدم:</b> {user.first_name}"
+    if maintenance:
+        add_contacted_user(user_id)
+        await msg.reply_text("🚧 البوت والمجموعة قيد التطوير. سيتم التواصل معك لاحقًا.")
+    else:
+        if not is_member:
+            await msg.reply_text(f"❌ الخدمة للأعضاء فقط.\n🔗 {GROUP_LINK}")
+            return
+        cnt = get_msg_count(user_id)
+        increment_msg_count(user_id)
+        if cnt == 0 or cnt % 5 == 0:
+            await msg.reply_text("✅ تم استلام رسالتك.")
+
+    # إرسال للقناة
+    stats = get_user_stats(user_id)
+    info = f"👤 {user.first_name}"
     if user.username:
-        user_info += f" (@{user.username})"
-    user_info += f"\n🆔 <code>{user_id}</code>"
-    user_info += f"\n📌 <b>عضو في المجموعة:</b> ✅ نعم"
-    user_info += f"\n📊 <b>الردود:</b> 0 | <b>الإنذارات:</b> {warns_count}"
-    if user_stats["banned"]:
-        user_info += " | <b>🚫 محظور</b>"
+        info += f" (@{user.username})"
+    info += f"\n🆔 <code>{user_id}</code>\n📌 عضو: {'✅' if is_member else '❌'}"
+    if not maintenance:
+        info += f"\n📊 إنذارات: {stats['warns']}"
+    if stats['banned']:
+        info += " | 🚫 محظور"
+    if maintenance:
+        info += "\n🚧 وضع الصيانة"
 
-    warn_button = InlineKeyboardButton(f"⚠️ إنذار ({warns_count})", callback_data=f"warn_{user_id}")
-    ban_button = InlineKeyboardButton("🚫 محظور" if user_stats["banned"] else "🚫 حظر من البوت",
-                                      callback_data="already_banned" if user_stats["banned"] else f"ban_{user_id}")
+    warn_btn = InlineKeyboardButton(f"⚠️ إنذار ({stats['warns']})", callback_data=f"warn_{user_id}")
+    ban_btn = InlineKeyboardButton("🚫 محظور" if stats['banned'] else "🚫 حظر", callback_data="already_banned" if stats['banned'] else f"ban_{user_id}")
 
-    caption = f"{user_info}\n\n📩 <b>الرسالة:</b>"
-    sent_msg = None
+    cap = f"{info}\n\n📩 الرسالة:"
     try:
         if msg.text:
-            sent_msg = await context.bot.send_message(
-                chat_id=ADMIN_CHANNEL_ID,
-                text=f"{caption}\n{msg.text}",
-                parse_mode="HTML"
-            )
+            sent = await context.bot.send_message(ADMIN_CHANNEL_ID, f"{cap}\n{msg.text}", parse_mode="HTML")
         elif msg.photo:
-            sent_msg = await context.bot.send_photo(
-                chat_id=ADMIN_CHANNEL_ID,
-                photo=msg.photo[-1].file_id,
-                caption=caption,
-                parse_mode="HTML"
-            )
+            sent = await context.bot.send_photo(ADMIN_CHANNEL_ID, msg.photo[-1].file_id, caption=cap, parse_mode="HTML")
         elif msg.document:
-            sent_msg = await context.bot.send_document(
-                chat_id=ADMIN_CHANNEL_ID,
-                document=msg.document.file_id,
-                caption=caption,
-                parse_mode="HTML"
-            )
+            sent = await context.bot.send_document(ADMIN_CHANNEL_ID, msg.document.file_id, caption=cap, parse_mode="HTML")
         else:
-            sent_msg = await context.bot.send_message(
-                chat_id=ADMIN_CHANNEL_ID,
-                text=f"{caption}\n(نوع رسالة غير مدعوم)",
-                parse_mode="HTML"
-            )
+            sent = await context.bot.send_message(ADMIN_CHANNEL_ID, f"{cap}\n(نوع غير مدعوم)", parse_mode="HTML")
     except Exception as e:
-        print(f"خطأ في إرسال الرسالة إلى قناة المشرف: {e}")
+        print(f"خطأ: {e}")
         return
 
-    msg_id = sent_msg.message_id
+    msg_id = sent.message_id
     reply_url = f"https://t.me/{BOT_USERNAME}?start=reply_{user_id}_{msg_id}"
-
     keyboard = [
-        [
-            InlineKeyboardButton("💬 رد", url=reply_url),
-            ban_button,
-            InlineKeyboardButton("🔓 إلغاء حظر", callback_data=f"unban_{user_id}"),
-        ],
-        [
-            warn_button,
-            InlineKeyboardButton("🗑️ حذف", callback_data="delete"),
-        ]
+        [InlineKeyboardButton("💬 رد", url=reply_url), ban_btn, InlineKeyboardButton("🔓 إلغاء", callback_data=f"unban_{user_id}")],
+        [warn_btn, InlineKeyboardButton("🗑️ حذف", callback_data="delete")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     try:
-        if sent_msg.photo:
-            await sent_msg.edit_caption(caption=caption, reply_markup=reply_markup, parse_mode="HTML")
+        if sent.photo:
+            await sent.edit_caption(caption=cap, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
-            await sent_msg.edit_text(text=f"{caption}\n{msg.text if msg.text else ''}", reply_markup=reply_markup, parse_mode="HTML")
-    except Exception as e:
-        print(f"خطأ في إضافة الأزرار: {e}")
+            await sent.edit_text(f"{cap}\n{msg.text or ''}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    except:
+        pass
 
     if "reply_counts" not in context.bot_data:
         context.bot_data["reply_counts"] = {}
     context.bot_data["reply_counts"][str(msg_id)] = 0
 
-    await msg.reply_text("✅ تم استلام رسالتك. سنتواصل معك قريباً.")
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    message = query.message
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    msg = q.message
 
     if data == "delete":
-        await message.delete()
+        await msg.delete()
         return
     if data == "already_banned":
-        await query.answer("هذا المستخدم محظور بالفعل.", show_alert=False)
+        await q.answer("محظور بالفعل", show_alert=False)
+        return
+    if data == "toggle_maintenance":
+        if update.effective_user.id not in MAINTENANCE_ADMINS:
+            await q.answer("غير مصرح", show_alert=True)
+            return
+        current = is_maintenance()
+        set_maintenance(not current)
+        await update_status_message(context)
+        await q.answer(f"الصيانة {'مفعلة' if not current else 'معطلة'}", show_alert=False)
+        # إذا تم إيقاف الصيانة، أرسل الروابط
+        if current:
+            await send_links_to_contacted_users(context)
         return
 
-    action, target_user_id = data.split("_", 1)
-    target_user_id = int(target_user_id)
+    action, uid = data.split("_", 1)
+    uid = int(uid)
 
     if action == "ban":
-        set_banned(target_user_id, True)
-        await update_message_after_action(message, target_user_id, context)
-        await context.bot.send_message(
-            chat_id=update.effective_user.id,
-            text=f"🚫 تم حظر المستخدم <code>{target_user_id}</code> من استخدام البوت."
-        )
+        set_banned(uid, True)
+        await update_message_after_action(msg, uid, context)
+        await context.bot.send_message(update.effective_user.id, f"🚫 تم حظر {uid}")
         try:
-            await context.bot.send_message(chat_id=target_user_id, text="⛔ لقد تم حظرك من استخدام بوت أرشيف النقشات.")
+            await context.bot.send_message(uid, "⛔ تم حظرك من البوت")
         except:
             pass
     elif action == "unban":
-        set_banned(target_user_id, False)
-        await update_message_after_action(message, target_user_id, context)
-        await context.bot.send_message(
-            chat_id=update.effective_user.id,
-            text=f"🔓 تم إلغاء حظر المستخدم <code>{target_user_id}</code>."
-        )
+        set_banned(uid, False)
+        await update_message_after_action(msg, uid, context)
+        await context.bot.send_message(update.effective_user.id, f"🔓 تم إلغاء حظر {uid}")
         try:
-            await context.bot.send_message(chat_id=target_user_id, text="✅ تم إلغاء حظرك من بوت أرشيف النقشات.")
+            await context.bot.send_message(uid, "✅ تم إلغاء حظرك")
         except:
             pass
     elif action == "warn":
-        increment_warn(target_user_id)
-        rules_text = (
-            "⚠️ <b>إنذار من إدارة مجموعة أرشيف النقشات</b> ⚠️\n\n"
-            "قواعد الاستخدام:\n"
-            "1- الاحترام وعدم التلفظ بأي ألفاظ مخلة.\n"
-            "2- عدم تكرار السؤال خلال 24 ساعة.\n"
-            "3- عدم الإكثار من الرسائل.\n"
-            "4- عدم إرسال أشياء خارج إطار المجموعة.\n\n"
-            "يرجى الالتزام بهذه القواعد لتجنب الحظر."
-        )
+        increment_warn(uid)
+        rules = "⚠️ إنذار.\n1- الاحترام\n2- عدم تكرار السؤال\n3- عدم الإكثار\n4- محتوى مناسب"
         try:
-            await context.bot.send_message(chat_id=target_user_id, text=rules_text, parse_mode="HTML")
+            await context.bot.send_message(uid, rules)
         except:
             pass
-        await update_message_after_action(message, target_user_id, context)
-        await query.answer("تم إرسال الإنذار.", show_alert=False)
+        await update_message_after_action(msg, uid, context)
+        await q.answer("تم الإنذار", show_alert=False)
 
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'replying_to' not in context.user_data:
         return
-    target_user_id = context.user_data['replying_to']
-    reply_text = update.message.text
+    target = context.user_data['replying_to']
+    txt = update.message.text
     try:
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text=f"📩 <b>رد من إدارة أرشيف النقشات:</b>\n\n{reply_text}",
-            parse_mode="HTML"
-        )
+        await context.bot.send_message(target, f"📩 رد من الإدارة:\n\n{txt}", parse_mode="HTML")
         msg_id = context.user_data.get('replying_to_msg_id')
         if msg_id and "reply_counts" in context.bot_data:
             key = str(msg_id)
             context.bot_data["reply_counts"][key] = context.bot_data["reply_counts"].get(key, 0) + 1
-            new_reply_count = context.bot_data["reply_counts"][key]
-            try:
-                await update_message_reply_count(msg_id, new_reply_count, context)
-            except:
-                pass
-        await update.message.reply_text(f"✅ تم إرسال الرد إلى المستخدم <code>{target_user_id}</code>.")
+            await update_message_reply_count(msg_id, context.bot_data["reply_counts"][key], context)
+        await update.message.reply_text(f"✅ تم الرد على {target}")
     except Exception as e:
-        await update.message.reply_text(f"❌ فشل الرد: {e}")
+        await update.message.reply_text(f"❌ فشل: {e}")
     finally:
         del context.user_data['replying_to']
         if 'replying_to_msg_id' in context.user_data:
             del context.user_data['replying_to_msg_id']
 
-async def update_message_after_action(message, user_id, context):
-    user_stats = get_user_stats(user_id)
-    warns = user_stats["warns"]
-    banned = user_stats["banned"]
-
-    new_caption = message.caption or message.text or ""
-    stats_pattern = r"📊 <b>الردود:</b> \d+ \| <b>الإنذارات:</b> \d+( \| <b>🚫 محظور</b>)?"
-    new_stats = f"📊 <b>الردود:</b> {context.bot_data['reply_counts'].get(str(message.message_id), 0)} | <b>الإنذارات:</b> {warns}"
+async def update_message_after_action(msg, uid, context):
+    stats = get_user_stats(uid)
+    warns = stats["warns"]
+    banned = stats["banned"]
+    new_cap = msg.caption or msg.text or ""
+    pattern = r"📊 إنذارات: \d+"
+    new_stat = f"📊 إنذارات: {warns}"
     if banned:
-        new_stats += " | <b>🚫 محظور</b>"
-    if re.search(stats_pattern, new_caption):
-        new_caption = re.sub(stats_pattern, new_stats, new_caption)
+        new_stat += " | 🚫 محظور"
+    if re.search(pattern, new_cap):
+        new_cap = re.sub(pattern, new_stat, new_cap)
     else:
-        new_caption += f"\n{new_stats}"
-
-    warn_button = InlineKeyboardButton(f"⚠️ إنذار ({warns})", callback_data=f"warn_{user_id}")
-    ban_button = InlineKeyboardButton("🚫 محظور" if banned else "🚫 حظر من البوت",
-                                      callback_data="already_banned" if banned else f"ban_{user_id}")
-
-    reply_url = f"https://t.me/{BOT_USERNAME}?start=reply_{user_id}_{message.message_id}"
-
+        new_cap += f"\n{new_stat}"
+    warn_btn = InlineKeyboardButton(f"⚠️ إنذار ({warns})", callback_data=f"warn_{uid}")
+    ban_btn = InlineKeyboardButton("🚫 محظور" if banned else "🚫 حظر", callback_data="already_banned" if banned else f"ban_{uid}")
+    reply_url = f"https://t.me/{BOT_USERNAME}?start=reply_{uid}_{msg.message_id}"
     keyboard = [
-        [
-            InlineKeyboardButton("💬 رد", url=reply_url),
-            ban_button,
-            InlineKeyboardButton("🔓 إلغاء حظر", callback_data=f"unban_{user_id}"),
-        ],
-        [
-            warn_button,
-            InlineKeyboardButton("🗑️ حذف", callback_data="delete"),
-        ]
+        [InlineKeyboardButton("💬 رد", url=reply_url), ban_btn, InlineKeyboardButton("🔓 إلغاء", callback_data=f"unban_{uid}")],
+        [warn_btn, InlineKeyboardButton("🗑️ حذف", callback_data="delete")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     try:
-        if message.photo:
-            await message.edit_caption(caption=new_caption, reply_markup=reply_markup, parse_mode="HTML")
-        else:
-            await message.edit_text(text=new_caption, reply_markup=reply_markup, parse_mode="HTML")
-    except Exception as e:
-        print(f"خطأ في تحديث الرسالة: {e}")
-
-async def update_message_reply_count(message_id, count, context):
-    try:
-        chat = await context.bot.get_chat(ADMIN_CHANNEL_ID)
-        msg = await context.bot.get_message(chat_id=ADMIN_CHANNEL_ID, message_id=message_id)
-        new_caption = msg.caption or msg.text or ""
-        new_caption = re.sub(r"(📊 <b>الردود:</b> )\d+", rf"\g<1>{count}", new_caption)
         if msg.photo:
-            await msg.edit_caption(caption=new_caption, reply_markup=msg.reply_markup, parse_mode="HTML")
+            await msg.edit_caption(caption=new_cap, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
-            await msg.edit_text(text=new_caption, reply_markup=msg.reply_markup, parse_mode="HTML")
-    except Exception as e:
-        print(f"خطأ في تحديث عدد الردود: {e}")
+            await msg.edit_text(new_cap, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    except:
+        pass
 
-# ========== أوامر المشرف ==========
+async def update_message_reply_count(msg_id, count, context):
+    try:
+        msg = await context.bot.get_message(ADMIN_CHANNEL_ID, msg_id)
+        new_cap = (msg.caption or msg.text or "")
+        new_cap = re.sub(r"(📊 الردود: )\d+", rf"\g<1>{count}", new_cap)
+        if msg.photo:
+            await msg.edit_caption(caption=new_cap, reply_markup=msg.reply_markup, parse_mode="HTML")
+        else:
+            await msg.edit_text(new_cap, reply_markup=msg.reply_markup, parse_mode="HTML")
+    except:
+        pass
+
 async def banned_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = load_stats()
-    banned_users = [uid for uid, data in stats.items() if data.get("banned", False)]
-    if not banned_users:
-        await update.message.reply_text("📭 لا يوجد مستخدمون محظورون حالياً.")
+    banned = [uid for uid, d in stats.items() if d.get("banned")]
+    if not banned:
+        await update.message.reply_text("📭 لا يوجد محظورون")
         return
-    text = "🚫 <b>قائمة المحظورين من البوت:</b>\n"
-    keyboard = []
-    for uid in banned_users:
+    txt = "🚫 المحظورون:\n"
+    kb = []
+    for uid in banned:
         try:
-            user = await context.bot.get_chat(int(uid))
-            name = user.first_name
-            if user.username:
-                name += f" (@{user.username})"
+            u = await context.bot.get_chat(int(uid))
+            name = u.first_name
         except:
             name = uid
-        text += f"\n🆔 <code>{uid}</code> - {name}"
-        keyboard.append([InlineKeyboardButton(f"🔓 إلغاء حظر {uid}", callback_data=f"unban_{uid}")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+        txt += f"\n🆔 {uid} - {name}"
+        kb.append([InlineKeyboardButton(f"🔓 إلغاء {uid}", callback_data=f"unban_{uid}")])
+    await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("الرجاء إدخال معرف المستخدم: /unban 123456789")
+        await update.message.reply_text("/unban id")
         return
     try:
         uid = int(context.args[0])
     except:
-        await update.message.reply_text("معرف غير صالح.")
+        await update.message.reply_text("معرف غير صالح")
         return
     if not is_banned(uid):
-        await update.message.reply_text("هذا المستخدم ليس محظوراً.")
+        await update.message.reply_text("غير محظور")
         return
     set_banned(uid, False)
-    await update.message.reply_text(f"🔓 تم إلغاء حظر المستخدم <code>{uid}</code>.")
+    await update.message.reply_text(f"🔓 تم إلغاء حظر {uid}")
     try:
-        await context.bot.send_message(chat_id=uid, text="✅ تم إلغاء حظرك من بوت أرشيف النقشات.")
+        await context.bot.send_message(uid, "✅ تم إلغاء حظرك")
     except:
         pass
 
-# ========== دالة ما قبل التشغيل (لمنع التعارضات) ==========
-async def post_init_handler(application: Application) -> None:
-    """
-    هذه الدالة تُنفذ قبل بدء البوت في استقبال التحديثات.
-    تقوم بحذف أي webhook قديم وتجاهل أي تحديثات معلقة لضمان بداية نظيفة.
-    """
-    print("🧹 جاري تنظيف جلسات البوت القديمة...")
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    print("✅ تم تنظيف الجلسات القديمة بنجاح.")
+async def send_links_to_contacted_users(context: ContextTypes.DEFAULT_TYPE):
+    users = get_contacted_users()
+    sent = 0
+    for uid in users:
+        try:
+            member = await context.bot.get_chat_member(GROUP_ID, uid)
+            if member.status not in ['member', 'administrator', 'creator']:
+                await context.bot.send_message(uid, f"🔗 انضم للمجموعة:\n{GROUP_LINK}")
+                sent += 1
+        except:
+            pass
+    await context.bot.send_message(ADMIN_CHANNEL_ID, f"✅ تم إرسال الرابط لـ {sent} مستخدم.")
+
+async def update_status_message(context: ContextTypes.DEFAULT_TYPE):
+    mode = is_maintenance()
+    text = f"🚧 حالة الصيانة: {'🟢 مفعلة' if mode else '🔴 معطلة'}"
+    kb = [[InlineKeyboardButton("🔴 إيقاف" if mode else "🟢 تفعيل", callback_data="toggle_maintenance")]]
+    msg_id = get_status_msg_id()
+    try:
+        if msg_id:
+            await context.bot.edit_message_text(text, ADMIN_CHANNEL_ID, msg_id, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            msg = await context.bot.send_message(ADMIN_CHANNEL_ID, text, reply_markup=InlineKeyboardMarkup(kb))
+            set_status_msg_id(msg.message_id)
+    except:
+        msg = await context.bot.send_message(ADMIN_CHANNEL_ID, text, reply_markup=InlineKeyboardMarkup(kb))
+        set_status_msg_id(msg.message_id)
+
+async def init_status_message(app: Application):
+    await update_status_message(app)
 
 def main():
-    # تشغيل خادم HTTP الوهمي في خيط منفصل (دون تعارض مع المنفذ)
     port = int(os.environ.get("PORT", 10000))
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -393,23 +407,20 @@ def main():
             pass
     def run_server():
         with socketserver.TCPServer(("0.0.0.0", port), Handler) as httpd:
-            print(f"خادم HTTP الوهمي يعمل على المنفذ {port}")
             httpd.serve_forever()
     threading.Thread(target=run_server, daemon=True).start()
 
-    # --- تشغيل البوت مع تنظيف الجلسات القديمة ---
     app = Application.builder().token(TOKEN).post_init(post_init_handler).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("banned", banned_list))
     app.add_handler(CommandHandler("unban", unban_command))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & filters.UpdateType.MESSAGE, handle_message))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply), group=1)
-    print("✅ البوت يعمل الآن على Render...")
 
-    # استخدام حلقة أحداث جديدة مخصصة لهذا الخيط
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_status_message(app))
     try:
         loop.run_until_complete(app.run_polling())
     except KeyboardInterrupt:
