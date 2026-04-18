@@ -109,19 +109,15 @@ async def post_init_handler(app: Application):
     app.job_queue.run_repeating(update_active_users_job, interval=21600, first=10)
 
 async def update_active_users_job(context: ContextTypes.DEFAULT_TYPE):
-    await update_active_users_message(context.bot)
-
-async def update_active_users_message(bot):
     stats = load_stats()
     active = sum(1 for d in stats.values() if d.get("msg_count", 0) > 0)
-    txt = f"📊 المستخدمون النشطون: {active}\n🕒 {datetime.now().strftime('%y/%m/%d %I:%M %p')}"
+    txt = f"📊 النشطون: {active}\n🕒 {datetime.now().strftime('%y/%m/%d %I:%M %p')}"
     data = load_maintenance()
     msg_id = data.get("active_users_msg_id")
     try:
-        if msg_id:
-            await bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id)
+        if msg_id: await context.bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id)
         else:
-            msg = await bot.send_message(ADMIN_CHANNEL_ID, txt)
+            msg = await context.bot.send_message(ADMIN_CHANNEL_ID, txt)
             data["active_users_msg_id"] = msg.message_id
             save_maintenance(data)
     except: pass
@@ -133,8 +129,7 @@ async def update_status_message(bot):
     data = load_maintenance()
     msg_id = data.get("status_msg_id")
     try:
-        if msg_id:
-            await bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id, reply_markup=InlineKeyboardMarkup(kb))
+        if msg_id: await bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id, reply_markup=InlineKeyboardMarkup(kb))
         else:
             msg = await bot.send_message(ADMIN_CHANNEL_ID, txt, reply_markup=InlineKeyboardMarkup(kb))
             data["status_msg_id"] = msg.message_id
@@ -157,21 +152,22 @@ async def update_banned_list_message(bot, page):
         start = page * per_page
         end = start + per_page
         items = []
+        kb_rows = []
         for i, u in enumerate(banned[start:end], start=start + 1):
             name = await get_user_name(bot, u["id"])
             short = name[:20] + "..." if len(name) > 20 else name
             items.append(f"{i}. <a href='tg://user?id={u['id']}'>{short}</a> | {u['date']}")
+            kb_rows.append([InlineKeyboardButton(f"🔓 فك حظر {short}", callback_data=f"unban_{u['id']}")])
         txt = f"🚫 المحظورون ({page+1}/{pages})\n" + "\n".join(items)
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("⬅️", callback_data=f"banpage_{page-1}"))
         nav.append(InlineKeyboardButton(f"📄 {page+1}/{pages}", callback_data="ignore"))
         if page < pages - 1: nav.append(InlineKeyboardButton("➡️", callback_data=f"banpage_{page+1}"))
-        kb = [nav] if nav else None
+        kb = kb_rows + ([nav] if nav else [])
     data = load_maintenance()
     msg_id = data.get("banned_list_msg_id")
     try:
-        if msg_id:
-            await bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="HTML", disable_web_page_preview=True)
+        if msg_id: await bot.edit_message_text(txt, ADMIN_CHANNEL_ID, msg_id, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="HTML", disable_web_page_preview=True)
         else:
             msg = await bot.send_message(ADMIN_CHANNEL_ID, txt, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="HTML", disable_web_page_preview=True)
             data["banned_list_msg_id"] = msg.message_id
@@ -201,9 +197,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         member = await context.bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
         is_member = member.status in ['member', 'administrator', 'creator']
     except: is_member = False
+
     if is_maintenance():
-        add_contacted_user(user_id)
+        if is_member:
+            add_contacted_user(user_id)
         await msg.reply_text("🚧 البوت قيد التطوير.")
+        if not is_member: return
     else:
         if not is_member:
             await msg.reply_text(f"❌ للأعضاء فقط.\n🔗 {GROUP_LINK}")
@@ -211,6 +210,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cnt = get_msg_count(user_id)
         increment_msg_count(user_id)
         if cnt == 0 or cnt % 5 == 0: await msg.reply_text("✅ تم استلام رسالتك.")
+
     stats = get_user_stats(user_id)
     info = f"👤 {user.first_name}" + (f" (@{user.username})" if user.username else "")
     info += f"\n🆔 <code>{user_id}</code>\n📌 عضو: {'✅' if is_member else '❌'}"
