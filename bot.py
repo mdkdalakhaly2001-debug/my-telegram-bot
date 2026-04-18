@@ -2,7 +2,7 @@ import logging
 import json
 import os
 import re
-import httpx
+import asyncio
 import threading
 import http.server
 import socketserver
@@ -10,7 +10,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 # ========== بيانات البوت ==========
-# نقرأ التوكن من متغيرات البيئة (للأمان) أو نستخدم القيمة الافتراضية
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8251573860:AAE29C3t7x0xeMbYeQQ05nEkdTyGTRjo82M")
 GROUP_ID = -1003367543007
 ADMIN_CHANNEL_ID = -1003751647210
@@ -21,7 +20,7 @@ BOT_USERNAME = "InscripAtions_Archive_bot"
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# ========== إدارة إحصائيات المستخدمين (إنذارات + حظر) ==========
+# ========== إدارة إحصائيات المستخدمين ==========
 def load_stats():
     if not os.path.exists(STATS_FILE):
         return {}
@@ -65,10 +64,7 @@ def set_banned(user_id, banned):
 
 def is_banned(user_id):
     return get_user_stats(user_id)["banned"]
-
-def get_warns(user_id):
-    return get_user_stats(user_id)["warns"]
-# =================================================================
+# =============================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and len(context.args) > 0:
@@ -375,24 +371,8 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-def main():
-    # --- خادم HTTP وهمي لتلبية متطلبات Render (منع السكون) ---
-    port = int(os.environ.get("PORT", 8080))
-    
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Bot is running")
-    
-    def run_server():
-        with socketserver.TCPServer(("0.0.0.0", port), Handler) as httpd:
-            print(f"خادم HTTP الوهمي يعمل على المنفذ {port}")
-            httpd.serve_forever()
-    
-    threading.Thread(target=run_server, daemon=True).start()
-    # ----------------------------------------------------------
-    
+async def run_bot():
+    """تشغيل البوت بشكل غير متزامن مع معالجة حلقة الأحداث"""
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("banned", banned_list))
@@ -401,7 +381,26 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply), group=1)
     print("✅ البوت يعمل الآن على Render...")
-    app.run_polling()
+    await app.run_polling()
+
+def main():
+    # تشغيل خادم HTTP الوهمي في خيط منفصل (دون تعارض مع المنفذ)
+    port = int(os.environ.get("PORT", 10000))
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+        def log_message(self, format, *args):
+            pass  # إيقاف طباعة الطلبات لتقليل التشويش
+    def run_server():
+        with socketserver.TCPServer(("0.0.0.0", port), Handler) as httpd:
+            print(f"خادم HTTP الوهمي يعمل على المنفذ {port}")
+            httpd.serve_forever()
+    threading.Thread(target=run_server, daemon=True).start()
+
+    # تشغيل البوت مع asyncio
+    asyncio.run(run_bot())
 
 if __name__ == "__main__":
     main()
